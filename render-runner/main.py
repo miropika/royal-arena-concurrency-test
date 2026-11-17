@@ -6,6 +6,7 @@ from pathlib import Path
 
 import psycopg
 from fastapi import FastAPI, Header, HTTPException
+from fastapi.responses import HTMLResponse
 
 app = FastAPI(title="Isolated Synthetic Concurrency Test")
 ROOT = Path(__file__).resolve().parents[1]
@@ -100,3 +101,24 @@ def run(token: str | None = Header(default=None, alias="X-Test-Token")):
         return run_test()
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Synthetic test failed: {type(exc).__name__}: {exc}")
+
+@app.get("/control", response_class=HTMLResponse)
+def control():
+    return """
+    <!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Isolated test runner</title></head><body style="font-family:system-ui;max-width:560px;margin:40px auto;padding:16px">
+    <h2>Royal Arena isolated concurrency test</h2>
+    <p>This runs only the synthetic fixture in the isolated Render database.</p>
+    <label>Test token</label><br><input id="token" type="password" style="width:100%;padding:12px;margin:8px 0">
+    <button id="run" style="padding:12px 18px">Run isolated test</button>
+    <pre id="out" style="white-space:pre-wrap;background:#eee;padding:12px;margin-top:16px"></pre>
+    <script>
+    document.getElementById('run').onclick=async()=>{
+      const out=document.getElementById('out');out.textContent='Running...';
+      try{
+        const r=await fetch('/run',{method:'POST',headers:{'X-Test-Token':document.getElementById('token').value}});
+        out.textContent=JSON.stringify(await r.json(),null,2);
+      }catch(e){out.textContent=String(e);}
+    };
+    </script></body></html>
+    """
