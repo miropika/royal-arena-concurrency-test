@@ -1,0 +1,81 @@
+name: Synthetic Royal Arena Concurrency Test
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  concurrency:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install PostgreSQL client
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes postgresql-client
+      - name: Create synthetic fixture
+        env:
+          PGPASSWORD: postgres
+        run: |
+          psql -h 127.0.0.1 -U postgres -d postgres -v ON_ERROR_STOP=1 \
+            -f tests/setup.sql
+      - name: Run two concurrent identical requests behind a wallet row lock
+        env:
+          PGPASSWORD: postgres
+        run: |
+          set -euo pipefail
+          USER_ID="00000000-0000-4000-8000-000000000003"
+          IDEMPOTENCY_KEY="00000000-0000-4000-8000-000000000777"
+          SPIN_SQL="select concurrency_test.spin('$USER_ID',100,'$IDEMPOTENCY_KEY');"
+
+          # Hold the wallet row lock briefly so both requests queue concurrently.
+          psql -h 127.0.0.1 -U postgres -d postgres -X -qAt -v ON_ERROR_STOP=1 \
+            -c "begin; select balance from concurrency_test.wallets where user_id='$USER_ID' for update; select pg_sleep(2); commit;" \
+            > /tmp/lock-holder.txt &
+          LOCK_PID=$!
+
+          LOCK_READY=0
+          for ATTEMPT in $(seq 1 50); do
+            LOCK_READY=$(psql -h 127.0.0.1 -U postgres -d postgres -X -qAt \
+              -c "select count(*) from pg_stat_activity where state='active' and query like '%pg_sleep(2)%';")
+            if [ "$LOCK_READY" = "1" ]; then break; fi
+            sleep 0.1
+          done
+          test "$LOCK_READY" = "1"
+
+          psql -h 127.0.0.1 -U postgres -d postgres -X -qAt -v ON_ERROR_STOP=1 \
+            -c "$SPIN_SQL" > /tmp/spin-a.json &
+          PID_A=$!
+          psql -h 127.0.0.1 -U postgres -d postgres -X -qAt -v ON_ERROR_STOP=1 \
+            -c "$SPIN_SQL" > /tmp/spin-b.json &
+          PID_B=$!
+
+          wait "$LOCK_PID"
+          wait "$PID_A"
+          wait "$PID_B"
+          cmp /tmp/spin-a.json /tmp/spin-b.json
+
+      - name: Assert exactly one settlement
+        env:
+          PGPASSWORD: postgres
+        run: |
+          psql -h 127.0.0.1 -U postgres -d postgres -v ON_ERROR_STOP=1 \
+            -f tests/assert_concurrency.sql
