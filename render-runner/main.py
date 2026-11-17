@@ -52,7 +52,7 @@ def run_test():
                     """
                     select count(*) from pg_stat_activity
                     where application_name='lock-holder'
-                      and state='active'
+                      and state='idle in transaction'
                       and query like '%for update%'
                     """
                 ).fetchone()[0]
