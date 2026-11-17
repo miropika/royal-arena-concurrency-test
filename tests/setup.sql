@@ -2,7 +2,8 @@
 -- This deliberately does NOT copy GAME WORLD production tables, payout code,
 -- wallet identifiers, users, secrets, or the Royal Arena paytable.
 
-create schema if not exists concurrency_test;
+drop schema if exists concurrency_test cascade;
+create schema concurrency_test;
 
 create table concurrency_test.wallets (
   user_id uuid primary key,
